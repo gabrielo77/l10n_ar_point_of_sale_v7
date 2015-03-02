@@ -203,7 +203,7 @@ class invoice(osv.osv):
     _defaults = {
             'is_debit_note': lambda *a: False,
             }
-            
+
     #Validacion para que el total de una invoice no pueda ser negativo.
     def _check_amount_total(self,cr,uid,ids,context=None):
         for invoice in self.read(cr,uid,ids,['amount_total'],context=context):
@@ -314,7 +314,14 @@ class invoice(osv.osv):
         """Funcion para obtener el siguiente numero de comprobante correspondiente en el sistema"""
 
         # Obtenemos el ultimo numero de comprobante para ese pos y ese tipo de comprobante
-        cr.execute("select max(to_number(substring(internal_number from '[0-9]{8}$'), '99999999')) from account_invoice where internal_number ~ '^[0-9]{4}-[0-9]{8}$' and pos_ar_id=%s and state in %s and type=%s and is_debit_note=%s", (invoice.pos_ar_id.id, ('open', 'paid', 'cancel',), invoice.type, invoice.is_debit_note))
+        cr.execute("""select max(to_number(substring(internal_number from '[0-9]{8}$'), '99999999'))
+                      from account_invoice
+                      where internal_number ~ '^[0-9]{4}-[0-9]{8}$'
+                          and pos_ar_id=%s
+                          and state in %s
+                          and type=%s and is_debit_note=%s""",
+                   (invoice.pos_ar_id.id, ('open', 'paid', 'cancel',),
+                    invoice.type, invoice.is_debit_note))
         last_number = cr.fetchone()
 
         # Si no devuelve resultados, es porque es el primero
@@ -325,6 +332,29 @@ class invoice(osv.osv):
 
         return next_number
 
+    def _validate_inv_number(self, cr, uid, ids, internal_number, context=None):
+        """
+        Validate invoice number format.
+        """
+
+        m = re.match('^[0-9]{4}-[0-9]{8}$', internal_number)
+        if not m:
+            raise osv.except_osv(_('Error'), _('The Invoice Number should be t'
+                                               'he format XXXX-XXXXXXXX')
+                                 )
+            return False
+
+        return True
+
+    def format_inv_number(self, cr, uid, ids, pos_name, number, context={}):
+        """
+        Returns invoice number in correct format
+        """
+
+        internal_number = '%04d-%08d' % (int(pos_name), number)
+
+        return internal_number
+
     def action_number(self, cr, uid, ids, context=None):
 
         if context is None:
@@ -334,7 +364,7 @@ class invoice(osv.osv):
         invoice_vals = {}
         invtype = None
 
-        #TODO: not correct fix but required a fresh values before reading it
+        # TODO: not correct fix but required a fresh values before reading it
         # Esto se usa para forzar a que recalcule los campos funcion
         self.write(cr, uid, ids, {})
 
@@ -350,13 +380,14 @@ class invoice(osv.osv):
             else:
                 local = True
 
-            #move_id = obj_inv.move_id and obj_inv.move_id.id or False
+            # move_id = obj_inv.move_id and obj_inv.move_id.id or False
             reference = obj_inv.reference or ''
 
             if local:
                 self._check_fiscal_values(cr, uid, obj_inv)
 
-            # si el usuario no ingreso un numero, busco el ultimo y lo incremento , si no hay ultimo va 1.
+            # si el usuario no ingreso un numero, busco el ultimo y lo
+            # incremento , si no hay ultimo va 1.
             # si el usuario hizo un ingreso dejo ese numero
             internal_number = False
             next_number = False
@@ -373,11 +404,16 @@ class invoice(osv.osv):
 
                 # Lo ponemos como en Proveedores, o sea, A0001-00000001
                 if not internal_number:
-                    internal_number = '%s-%08d' % (pos_ar.name, next_number)
+                    internal_number = self.format_inv_number(cr, uid, ids,
+                                                             pos_ar.name,
+                                                             next_number,
+                                                             context=context
+                                                             )
 
-                m = re.match('^[0-9]{4}-[0-9]{8}$', internal_number)
-                if not m:
-                    raise osv.except_osv( _('Error'), _('The Invoice Number should be the format XXXX-XXXXXXXX'))
+                else:
+                    valid = self._validate_inv_number(cr, uid, ids, internal_number, context=context)
+                    if not valid:
+                        break
 
                 # Escribimos el internal number
                 invoice_vals['internal_number'] = internal_number
@@ -385,12 +421,12 @@ class invoice(osv.osv):
             # Si son de Proveedor
             else:
                 if not obj_inv.internal_number:
-                    raise osv.except_osv( _('Error'), _('The Invoice Number should be filled'))
+                    raise osv.except_osv(_('Error'), _('The Invoice Number should be filled'))
 
                 if local:
-                    m = re.match('^[0-9]{4}-[0-9]{8}$', obj_inv.internal_number)
-                    if not m:
-                        raise osv.except_osv( _('Error'), _('The Invoice Number should be the format XXXX-XXXXXXXX'))
+                    valid = self._validate_inv_number(cr, uid, ids, obj_inv.internal_number)
+                    if not valid:
+                        break
 
             # Escribimos los campos necesarios de la factura
             self.write(cr, uid, obj_inv.id, invoice_vals)
